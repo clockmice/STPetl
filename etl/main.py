@@ -3,7 +3,7 @@ import base64
 import sys
 
 OAUTH_TOKEN_URL = "https://accounts.spotify.com/api/token"
-TRACKS_URL = "https://api.spotify.com/v1/tracks/"
+TRACKS_URL = "https://api.spotify.com/v1/tracks/?ids="
 
 def make_authorization_headers(client_id, client_secret):
     auth_header = base64.b64encode(
@@ -27,7 +27,8 @@ def request_access_token(client_id, client_secret):
     response = requests.post(
         OAUTH_TOKEN_URL,
         data=payload,
-        headers=headers
+        headers=headers,
+        verify=True
     )
     if response.status_code != 200:
         print(response.reason)
@@ -37,11 +38,11 @@ def request_access_token(client_id, client_secret):
     return token_info
 
 
-def get_track_data(token, track_id):
-    header = make_request_header(token)
-    response = requests.get(
-        TRACKS_URL + track_id,
-        headers=header
+def get_tracks_data(session, track_ids):
+
+    response = session.get(
+        url=TRACKS_URL + track_ids,
+        verify=True
     )
     if response.status_code != 200:
         print(response.reason)
@@ -51,11 +52,28 @@ def get_track_data(token, track_id):
 
 
 if __name__ == "__main__":
+    track_ids = []
+    batch = []
+    with open("resources/track_ids.txt") as f:
+        for line in f:
+            if len(batch) >= 50:
+                track_ids.append(batch)
+                batch = []
+
+            batch.append(line.strip())
+        track_ids.append(batch)
+
     token_info = request_access_token(sys.argv[1], sys.argv[2])
     print(token_info)
 
     token = token_info['access_token']
     print(token)
 
-    resp = get_track_data(token, '1Ku0J6YIKWOd6pZi4VlFLb')
-    print(resp)
+    header = make_request_header(token)
+    session = requests.Session()
+    session.headers = header
+
+    for batch in track_ids:
+        resp = get_tracks_data(session, ",".join(batch))
+        for track in resp['tracks']:
+            print(track['name'])
