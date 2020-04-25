@@ -1,11 +1,46 @@
-import requests
-import base64
-import sys
-import sqlite3
+import requests, base64, sys, sqlite3, yaml, jmespath
 from datetime import date
 
-OAUTH_TOKEN_URL = "https://accounts.spotify.com/api/token"
-TRACKS_URL = "https://api.spotify.com/v1/tracks/?ids="
+
+class TableData:
+    def __init__(self, table_name, api_spec, col_names, col_types, col_values):
+        self.table_name = table_name
+        self.api_spec = api_spec
+        self.col_names = col_names
+        self.col_types = col_types
+        self.col_values = col_values
+
+    def to_string(self):
+        return f'Table name: {self.table_name},\nApi spec: {self.api_spec},\n' \
+               f'Column names: {self.col_names},\nColumn types: {self.col_types}\n' \
+               f'Column values: {self.col_values}'
+
+    def generate_insert_stmt(self):
+        cols = ', '.join('"{}"'.format(col) for col in self.col_names)
+        vals = ', '.join(':{}'.format(col) for col in self.col_names)
+        return f'INSERT INTO "{self.table_name}" ({cols}) VALUES ({vals})'
+
+    def generate_create_stmt(self):
+        tuples = zip(self.col_names, self.col_types)
+        s = []
+        for t in tuples:
+            s.append(' '.join(t))
+
+        return f'CREATE TABLE IF NOT EXISTS {self.table_name} ({",".join(s)})'
+
+    def add_values(self, values):
+        self.col_values.append(values)
+
+
+class Config:
+    def __init__(self, batch_number, batch_size, db_connect, api_batch_size, oauth_token_url, tracks_url, input_path):
+        self.batch_number = batch_number
+        self.batch_size = batch_size
+        self.db_connect = db_connect
+        self.api_batch_size = api_batch_size
+        self.oauth_token_url = oauth_token_url
+        self.tracks_url = tracks_url
+        self.input_path = input_path
 
 
 def make_authorization_headers(client_id, client_secret):
@@ -19,7 +54,7 @@ def make_request_header(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def request_access_token(client_id, client_secret):
+def request_access_token(config, client_id, client_secret):
     """Gets client credentials access token """
     payload = {"grant_type": "client_credentials"}
 
@@ -28,7 +63,7 @@ def request_access_token(client_id, client_secret):
     )
 
     response = requests.post(
-        OAUTH_TOKEN_URL,
+        config.oauth_token_url,
         data=payload,
         headers=headers,
         verify=True
@@ -41,10 +76,10 @@ def request_access_token(client_id, client_secret):
     return token_info
 
 
-def get_tracks_data(session, track_ids):
+def request_api(config, session, track_ids):
 
     response = session.get(
-        url=TRACKS_URL + track_ids,
+        url=config.tracks_url + track_ids,
         verify=True
     )
     if response.status_code != 200:
@@ -54,56 +89,98 @@ def get_tracks_data(session, track_ids):
     return response.json()
 
 
-def initiate_db(conn):
+def initiate_db(config, tables):
+    conn = sqlite3.connect(config.db_connect)
     c = conn.cursor()
 
-    # Create track_info table
-    c.execute('''CREATE TABLE IF NOT EXISTS track_info 
-        (id text, name text, release_date date, uri text, duration_ms integer)''')
+    for t in tables:
+        c.execute(t.generate_create_stmt())
 
-    # Create track_daily_popularity table
-    c.execute('''CREATE TABLE IF NOT EXISTS track_daily_popularity 
-            (ddt date, id text, popularuty integer)''')
+    conn.commit()
+    return conn
+
+
+def get_tracks(config, session, track_ids):
+    tracks = []
+    for batch in track_ids:
+       resp = request_api(config, session, ",".join(batch))
+       tracks.extend(resp['tracks'])
+
+    return tracks
+
+
+def write_to_db(conn, tables):
+    c = conn.cursor()
+
+    for t in tables:
+        c.executemany(t.generate_insert_stmt(), t.col_values)
 
     conn.commit()
 
 
-def write_to_db(conn, track_info_data, track_daily_popularity_data):
-    c = conn.cursor()
-    c.executemany('INSERT INTO track_info VALUES (?,?,?,?,?)', track_info_data)
-    c.executemany('INSERT INTO track_daily_popularity VALUES (?,?,?)', track_daily_popularity_data)
-
-
-def verify(conn):
+def verify(conn, tables):
     # Print the table contents
-    for row in conn.execute("select * from track_info"):
-        print (row)
-    for row in conn.execute("select * from track_daily_popularity"):
-        print (row)
+    for t in tables:
+        for row in conn.execute(f"select * from {t.table_name}"):
+            print (row)
+
+
+def create_tables(spec):
+    tables = []
+    for t in spec['tables']:
+        col_names = []
+        col_types = []
+        api_spec = []
+        for col in t['columns']:
+            pair = col.split(':')
+            col_names.append(pair[0])
+            api_spec.append(pair[1])
+            col_types.append(pair[2])
+
+        table = TableData(t['table_name'], api_spec, col_names, col_types, [])
+        tables.append(table)
+
+    return tables
+
+
+def get_track_ids(config):
+    track_ids = []
+    batch = []
+    with open(config.input_path) as f:
+        line_num = 1
+        skip = (config.batch_number - 1) * config.batch_size
+        for line in f:
+            if skip < line_num <= (skip + config.batch_size):
+                if len(batch) >= config.api_batch_size:
+                    track_ids.append(batch)
+                    batch = []
+                batch.append(line.strip())
+            line_num += 1
+        track_ids.append(batch)
+
+    return track_ids
 
 
 if __name__ == "__main__":
 
+    # Read config file
+    spec = {}
+    with open(sys.argv[1]) as f:
+        spec = yaml.load(f, Loader=yaml.FullLoader)
+    config = Config(spec['batch_number'], spec['batch_size'], spec['db_connect'], spec['api_batch_size'],
+                    spec['oauth_token_url'], spec['tracks_url'], spec['input_path'])
+
+    tables = create_tables(spec)
+
     # Set up database
-    conn = sqlite3.connect('stp.db')
-    initiate_db(conn)
+    conn = initiate_db(config, tables)
 
-    track_ids = []
-    batch = []
-    with open("resources/track_ids.txt") as f:
-        for line in f:
-            if len(batch) >= 50:
-                track_ids.append(batch)
-                batch = []
+    # Get input track ids
+    track_ids = get_track_ids(config)
 
-            batch.append(line.strip())
-        track_ids.append(batch)
-
-    token_info = request_access_token(sys.argv[1], sys.argv[2])
-    print(token_info)
-
+    # Get token
+    token_info = request_access_token(config, sys.argv[2], sys.argv[3])
     token = token_info['access_token']
-    print(token)
 
     header = make_request_header(token)
     session = requests.Session()
@@ -113,14 +190,26 @@ if __name__ == "__main__":
 
     track_data = []
     daily_popularity_data = []
-    for batch in track_ids:
-        resp = get_tracks_data(session, ",".join(batch))
-        for track in resp['tracks']:
-            track_data.append([track['id'], track['name'], track['album']['release_date'], track['uri'], track['duration_ms']])
-            daily_popularity_data.append([dt, track['id'], track['popularity']])
 
-    write_to_db(conn, track_data, daily_popularity_data)
+    # Get the data from API. For each batch make a request and
+    tracks = get_tracks(config, session, track_ids)
 
-    verify(conn)
+    data = {}
+    for track in tracks:
+
+        for table in tables:
+            track_data = []
+            for spec in table.api_spec:
+                if '{current_date}' in spec:
+                    value = dt
+                else:
+                    value = jmespath.search(spec, track)
+
+                track_data.append(value)
+
+            table.add_values(track_data)
+
+    write_to_db(conn, tables)
+    verify(conn, tables)
 
     conn.close()

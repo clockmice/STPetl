@@ -1,0 +1,20 @@
+batch_number: 1
+batch_size: 1000
+db_connect: 'stp.db'
+api_batch_size: 50
+oauth_token_url: 'https://accounts.spotify.com/api/token'
+tracks_url: 'https://api.spotify.com/v1/tracks/?ids='
+input_path: 'resources/track_ids.txt'
+tables:
+  - table_name: track_info
+    columns:
+      - 'track_id:id:text'
+      - 'track_name:name:text'
+      - 'release_date:album.release_date:date'
+      - 'uri:uri:text'
+      - 'duration_ms:duration_ms:integer'
+  - table_name: track_daily_popularity
+    columns:
+      - 'ddt:{current_date}:date'
+      - 'track_id:id:text'
+      - 'popularity:popularity:integer'
