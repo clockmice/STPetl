@@ -1,5 +1,11 @@
-import requests, base64, sys, sqlite3, yaml, jmespath
 from datetime import date
+
+import base64
+import jmespath
+import requests
+import sqlite3
+import sys
+import yaml
 
 
 class TableData:
@@ -16,8 +22,8 @@ class TableData:
                f'Column values: {self.col_values}'
 
     def generate_insert_stmt(self):
-        cols = ', '.join('"{}"'.format(col) for col in self.col_names)
-        vals = ', '.join(':{}'.format(col) for col in self.col_names)
+        cols = ', '.join(f'{col}' for col in self.col_names)
+        vals = ', '.join(f':{col}' for col in self.col_names)
         return f'INSERT INTO "{self.table_name}" ({cols}) VALUES ({vals})'
 
     def generate_create_stmt(self):
@@ -45,18 +51,17 @@ class Config:
 
 def make_authorization_headers(client_id, client_secret):
     auth_header = base64.b64encode(
-        (client_id + ":" + client_secret).encode("ascii")
+        (client_id + ':' + client_secret).encode('ascii')
     )
-    return {"Authorization": f"Basic {auth_header.decode('ascii')}"}
+    return {'Authorization': f'Basic {auth_header.decode("ascii")}'}
 
 
 def make_request_header(token):
-    return {"Authorization": f"Bearer {token}"}
+    return {'Authorization': f'Bearer {token}'}
 
 
 def request_access_token(config, client_id, client_secret):
-    """Gets client credentials access token """
-    payload = {"grant_type": "client_credentials"}
+    payload = {'grant_type': 'client_credentials'}
 
     headers = make_authorization_headers(
         client_id, client_secret
@@ -103,7 +108,7 @@ def initiate_db(config, tables):
 def get_tracks(config, session, track_ids):
     tracks = []
     for batch in track_ids:
-       resp = request_api(config, session, ",".join(batch))
+       resp = request_api(config, session, ','.join(batch))
        tracks.extend(resp['tracks'])
 
     return tracks
@@ -121,7 +126,7 @@ def write_to_db(conn, tables):
 def verify(conn, tables):
     # Print the table contents
     for t in tables:
-        for row in conn.execute(f"select * from {t.table_name}"):
+        for row in conn.execute(f'select * from {t.table_name}'):
             print (row)
 
 
@@ -161,7 +166,7 @@ def get_track_ids(config):
     return track_ids
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
 
     # Read config file
     spec = {}
@@ -178,7 +183,7 @@ if __name__ == "__main__":
     # Get input track ids
     track_ids = get_track_ids(config)
 
-    # Get token
+    # Get token for API
     token_info = request_access_token(config, sys.argv[2], sys.argv[3])
     token = token_info['access_token']
 
@@ -188,15 +193,10 @@ if __name__ == "__main__":
 
     dt = date.today()
 
-    track_data = []
-    daily_popularity_data = []
-
-    # Get the data from API. For each batch make a request and
+    # Get data from API
     tracks = get_tracks(config, session, track_ids)
 
-    data = {}
     for track in tracks:
-
         for table in tables:
             track_data = []
             for spec in table.api_spec:
@@ -208,7 +208,7 @@ if __name__ == "__main__":
                 track_data.append(value)
 
             table.add_values(track_data)
-
+    
     write_to_db(conn, tables)
     verify(conn, tables)
 
