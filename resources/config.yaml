@@ -8,11 +8,12 @@ input_path: 'resources/track_ids.txt'
 tables:
   - table_name: track_info
     columns:
-      - 'track_id:id:text'
+      - 'track_id:id:text primary key'
       - 'track_name:name:text'
       - 'release_date:album.release_date:date'
       - 'uri:uri:text'
       - 'duration_ms:duration_ms:integer'
+    upsert: 'ON CONFLICT(track_id) DO UPDATE SET track_name=excluded.track_name,release_date=excluded.release_date,uri=excluded.uri,duration_ms=excluded.duration_ms'
   - table_name: track_daily_popularity
     columns:
       - 'ddt:{current_date}:date'

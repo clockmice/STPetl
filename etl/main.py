@@ -9,22 +9,23 @@ import yaml
 
 
 class TableData:
-    def __init__(self, table_name, api_spec, col_names, col_types, col_values):
+    def __init__(self, table_name, api_spec, col_names, col_types, col_values, upsert):
         self.table_name = table_name
         self.api_spec = api_spec
         self.col_names = col_names
         self.col_types = col_types
         self.col_values = col_values
+        self.upsert = upsert
 
     def to_string(self):
         return f'Table name: {self.table_name},\nApi spec: {self.api_spec},\n' \
                f'Column names: {self.col_names},\nColumn types: {self.col_types}\n' \
-               f'Column values: {self.col_values}'
+               f'Column values: {self.col_values},\nUpsert: {self.upsert}'
 
     def generate_insert_stmt(self):
         cols = ', '.join(f'{col}' for col in self.col_names)
         vals = ', '.join(f':{col}' for col in self.col_names)
-        return f'INSERT INTO "{self.table_name}" ({cols}) VALUES ({vals})'
+        return f'INSERT INTO "{self.table_name}" ({cols}) VALUES ({vals}) {self.upsert}'
 
     def generate_create_stmt(self):
         tuples = zip(self.col_names, self.col_types)
@@ -109,7 +110,7 @@ def get_tracks(config, session, track_ids):
     tracks = []
     for batch in track_ids:
        resp = request_api(config, session, ','.join(batch))
-       tracks.extend(resp['tracks'])
+       tracks.extend(resp.get('tracks'))
 
     return tracks
 
@@ -132,17 +133,17 @@ def verify(conn, tables):
 
 def create_tables(spec):
     tables = []
-    for t in spec['tables']:
+    for t in spec.get('tables'):
         col_names = []
         col_types = []
         api_spec = []
-        for col in t['columns']:
+        for col in t.get('columns'):
             pair = col.split(':')
             col_names.append(pair[0])
             api_spec.append(pair[1])
             col_types.append(pair[2])
-
-        table = TableData(t['table_name'], api_spec, col_names, col_types, [])
+        upsert = t.get('upsert', '')
+        table = TableData(t.get('table_name'), api_spec, col_names, col_types, [], upsert)
         tables.append(table)
 
     return tables
@@ -172,8 +173,9 @@ if __name__ == '__main__':
     spec = {}
     with open(sys.argv[1]) as f:
         spec = yaml.load(f, Loader=yaml.FullLoader)
-    config = Config(spec['batch_number'], spec['batch_size'], spec['db_connect'], spec['api_batch_size'],
-                    spec['oauth_token_url'], spec['tracks_url'], spec['input_path'])
+    config = Config(spec.get('batch_number'), spec.get('batch_size'), spec.get('db_connect'),
+                    spec.get('api_batch_size'),spec.get('oauth_token_url'),
+                    spec.get('tracks_url'), spec.get('input_path'))
 
     tables = create_tables(spec)
 
@@ -185,7 +187,7 @@ if __name__ == '__main__':
 
     # Get token for API
     token_info = request_access_token(config, sys.argv[2], sys.argv[3])
-    token = token_info['access_token']
+    token = token_info.get('access_token')
 
     header = make_request_header(token)
     session = requests.Session()
@@ -208,7 +210,7 @@ if __name__ == '__main__':
                 track_data.append(value)
 
             table.add_values(track_data)
-    
+
     write_to_db(conn, tables)
     verify(conn, tables)
 
